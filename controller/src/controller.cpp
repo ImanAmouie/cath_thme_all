@@ -24,8 +24,8 @@ class Controller_Node: public rclcpp::Node{
         Controller_Node():Node("controller_node"){
             srand(time(0));
             spawn_client_ = this->create_client<turtlesim::srv::Spawn>("/spawn");
-            generator_timer_ = this->create_wall_timer(4000ms,std::bind(&Controller_Node::turtle_generator, this));
-            publisher_timer_ = this->create_wall_timer(5ms,std::bind(&Controller_Node::position, this));
+            generator_timer_ = this->create_wall_timer(2000ms,std::bind(&Controller_Node::turtle_generator, this));
+            publisher_timer_ = this->create_wall_timer(0.2ms,std::bind(&Controller_Node::position, this));
             position_subscriber_ = this->create_subscription<turtlesim::msg::Pose>("/turtle1/pose",10,std::bind(&Controller_Node::position_callback,this,std::placeholders::_1));
             velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/turtle1/cmd_vel", 10);
             kill_client_ = this->create_client<turtlesim::srv::Kill>("/kill");
@@ -53,7 +53,11 @@ class Controller_Node: public rclcpp::Node{
             auto result = spawn_client_->async_send_request(request,std::bind(&Controller_Node::spawn_response_callback,this,std::placeholders::_1));
         }
         void position(){
+            start_ = std::chrono::steady_clock::now();
             velocity_publisher_->publish(output);
+            auto now_ = std::chrono::steady_clock::now();
+            float dt = std::chrono::duration<float>(now_ - start_).count();
+            //RCLCPP_INFO(this->get_logger(),"controller time: %f",dt);
         }
         void position_callback(const turtlesim::msg::Pose::SharedPtr position){
             int index = find_closest_turtle(position->x , position->y);
@@ -112,7 +116,6 @@ class Controller_Node: public rclcpp::Node{
             auto result = kill_client_->async_send_request(request);
         }
         std::vector<Turtle> turtles_;
-        const float catch_distance = 0.001f;
         bool spawn_pending{false};
         bool kill_pending{false};
         float error_x {0.0f};
@@ -123,6 +126,8 @@ class Controller_Node: public rclcpp::Node{
         std::string turtle_name;
         float kp1 {2.0f}, ki1{0.0f} , kd1{0.0f};
         float kp2 {2.5f}, ki2{0.0f} , kd2{0.0f};
+        const float catch_distance = 0.5f;
+        std::chrono::steady_clock::time_point start_ ;
         rclcpp::Client<turtlesim::srv::Spawn>::SharedPtr spawn_client_;
         rclcpp::TimerBase::SharedPtr generator_timer_;
         rclcpp::TimerBase::SharedPtr publisher_timer_;
