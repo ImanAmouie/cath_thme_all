@@ -14,5 +14,6 @@
             "intelliSenseMode": "linux-gcc-x64"
         }
     ],
-    "version": 4
+    "version": 4,
+    "cmake.sourceDirectory": "/home/iman/Workspace/cath_thme_all/controller"
 }
