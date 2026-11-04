@@ -24,8 +24,8 @@ class Controller_Node: public rclcpp::Node{
         Controller_Node():Node("controller_node"){
             srand(time(0));
             spawn_client_ = this->create_client<turtlesim::srv::Spawn>("/spawn");
-            generator_timer_ = this->create_wall_timer(2000ms,std::bind(&Controller_Node::turtle_generator, this));
-            publisher_timer_ = this->create_wall_timer(0.2ms,std::bind(&Controller_Node::position, this));
+            generator_timer_ = this->create_wall_timer(3000ms,std::bind(&Controller_Node::turtle_generator, this));
+            publisher_timer_ = this->create_wall_timer(10ms,std::bind(&Controller_Node::v_publisher, this));
             position_subscriber_ = this->create_subscription<turtlesim::msg::Pose>("/turtle1/pose",10,std::bind(&Controller_Node::position_callback,this,std::placeholders::_1));
             velocity_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>("/turtle1/cmd_vel", 10);
             kill_client_ = this->create_client<turtlesim::srv::Kill>("/kill");
@@ -52,14 +52,11 @@ class Controller_Node: public rclcpp::Node{
             spawn_pending = true;
             auto result = spawn_client_->async_send_request(request,std::bind(&Controller_Node::spawn_response_callback,this,std::placeholders::_1));
         }
-        void position(){
-            start_ = std::chrono::steady_clock::now();
+        void v_publisher(){
             velocity_publisher_->publish(output);
-            auto now_ = std::chrono::steady_clock::now();
-            float dt = std::chrono::duration<float>(now_ - start_).count();
-            //RCLCPP_INFO(this->get_logger(),"controller time: %f",dt);
         }
         void position_callback(const turtlesim::msg::Pose::SharedPtr position){
+            start_ = std::chrono::steady_clock::now();
             int index = find_closest_turtle(position->x , position->y);
             if(index <0 ){
                 output.linear.x = 0.0;
@@ -72,18 +69,30 @@ class Controller_Node: public rclcpp::Node{
                 kill(target.name);
                 kill_pending = false;
                 turtles_.erase(turtles_.begin()+index);
+                RCLCPP_INFO(this->get_logger(),"distance error: %f , linear velocity: %f", distance_error,output.linear.x);
                 return;
             }
             float desired_theta = std::atan2((target.y_pos-position->y),(target.x_pos-position->x));
             angular_error = std::atan2(std::sin(desired_theta-position->theta),std::cos(desired_theta-position->theta));
-            //float d_term_l = kp1 * distance_error;
-            //float d_term_a = kp2 * angular_error; 
-            // output.linear.x = std::clamp(d_term_l,0.0f,100.0f);
-            // output.angular.z = std::clamp(d_term_a,0.0f,100.0f);
-            float d = kp1 * distance_error;
-            float a = kp2 * angular_error;
-            output.linear.x  = std::clamp(d,0.0f,2.5f);
-            output.angular.z = std::clamp(a,-3.0f,3.0f);
+            //angular_error = desired_theta - position->theta;
+            float d = kp_v * distance_error;
+            float a = kp_a * angular_error;
+            integral_v = distance_error * 0.01f;
+            integral_a = angular_error * 0.01f;
+            d += integral_v* ki_v;
+            a += integral_a * ki_a;
+            derivative_v= (distance_error - prev_error_v)/ 0.01f; 
+            derivative_a = (angular_error - prev_error_a)/0.01f;
+            d += derivative_v * kd_v;
+            a+= derivative_a * kd_a;
+            output.linear.x  = std::clamp(d,0.0f,4.0f);
+            output.angular.z = std::clamp(a,-3.1415f,3.1415f);
+            prev_error_v = distance_error;
+            prev_error_a = angular_error;
+            //RCLCPP_INFO(this->get_logger(),"linear: %f , angular: %f", output.linear.x,output.angular.z);
+            auto now_ = std::chrono::steady_clock::now();
+            float dt = std::chrono::duration<float>(now_ - start_).count();
+            //RCLCPP_INFO(this->get_logger(),"controller time: %f",dt);
             //velocity_publisher_->publish(output);
         }
         void spawn_response_callback(rclcpp::Client<turtlesim::srv::Spawn>::SharedFuture future){
@@ -112,8 +121,8 @@ class Controller_Node: public rclcpp::Node{
             }
             auto request = std::make_shared<turtlesim::srv::Kill::Request>();
             request->name = name;
-            kill_pending = true;
             auto result = kill_client_->async_send_request(request);
+            kill_pending = true;
         }
         std::vector<Turtle> turtles_;
         bool spawn_pending{false};
@@ -121,12 +130,15 @@ class Controller_Node: public rclcpp::Node{
         float error_x {0.0f};
         float error_y {0.0f};
         float target_x {0.0f} , target_y {0.0f};
+        float integral_v{0.0f}, integral_a{0.0f};
+        float derivative_v{0.0f} , derivative_a{0.0f};
+        float prev_error_v {0.0f} , prev_error_a{0.0f};
         float distance_error{0.0f};
         float angular_error{0.0f};
         std::string turtle_name;
-        float kp1 {2.0f}, ki1{0.0f} , kd1{0.0f};
-        float kp2 {2.5f}, ki2{0.0f} , kd2{0.0f};
-        const float catch_distance = 0.5f;
+        float kp_v {2.50f}, ki_v{0.5f} , kd_v{0.25f};
+        float kp_a {4.0f}, ki_a{0.0f} , kd_a{0.0f};
+        const float catch_distance = 0.025f;
         std::chrono::steady_clock::time_point start_ ;
         rclcpp::Client<turtlesim::srv::Spawn>::SharedPtr spawn_client_;
         rclcpp::TimerBase::SharedPtr generator_timer_;
@@ -135,7 +147,6 @@ class Controller_Node: public rclcpp::Node{
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr velocity_publisher_;
         rclcpp::Client<turtlesim::srv::Kill>::SharedPtr kill_client_;
         geometry_msgs::msg::Twist output;
-
 };
 int main(int argc, char * argv[]){
   rclcpp::init(argc, argv);
